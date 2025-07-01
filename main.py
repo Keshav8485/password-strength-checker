@@ -1,4 +1,7 @@
+# main.py
+
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import re
 import hashlib
@@ -8,8 +11,27 @@ import string
 
 app = FastAPI()
 
+# CORS middleware for browser-based access (use restrictive origin in production)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 class PasswordInput(BaseModel):
     password: str
+
+@app.get("/")
+def root():
+    return {
+        "message": "Welcome to the Password Strength Checker API!",
+        "routes": {
+            "/analyze": "POST - Analyze password strength",
+            "/generate": "POST - Generate a secure password"
+        }
+    }
 
 @app.post("/analyze")
 def analyze_password(data: PasswordInput):
@@ -34,7 +56,7 @@ def analyze_password(data: PasswordInput):
         score += part
         if val == 0:
             if name == 'length':
-                feedback.append("Use at least 12 characters for maximum points.")
+                feedback.append("Use at least 12 characters.")
             elif name == 'uppercase':
                 feedback.append("Add uppercase letters.")
             elif name == 'lowercase':
@@ -42,7 +64,7 @@ def analyze_password(data: PasswordInput):
             elif name == 'digits':
                 feedback.append("Include digits.")
             elif name == 'special':
-                feedback.append("Include special characters like !@#$.")
+                feedback.append("Include special characters.")
 
     # Check breach via HIBP API
     sha1pwd = hashlib.sha1(password.encode()).hexdigest().upper()
@@ -61,7 +83,6 @@ def analyze_password(data: PasswordInput):
     except:
         pass
 
-    # SHA‑256 hash
     hashed = hashlib.sha256(password.encode()).hexdigest()
 
     return {
@@ -75,10 +96,6 @@ def analyze_password(data: PasswordInput):
 
 @app.post("/generate")
 def generate_password():
-    """
-    Always generate a secure 12-character password
-    composed of uppercase, lowercase, digits, and specials.
-    """
     alphabet = string.ascii_letters + string.digits + "!@#_"
     pw = ''.join(secrets.choice(alphabet) for _ in range(12))
     return {"password": pw}
