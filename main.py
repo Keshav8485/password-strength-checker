@@ -1,78 +1,84 @@
+from fastapi import FastAPI
+from pydantic import BaseModel
 import re
 import hashlib
+import requests
+import secrets
+import string
 
-def check_password_strength(password):
-    total_score = 0
-    feedback = []
+app = FastAPI()
 
-    # Criteria breakdown (total: 100)
+class PasswordInput(BaseModel):
+    password: str
+
+@app.post("/analyze")
+def analyze_password(data: PasswordInput):
+    password = data.password
+
     criteria = {
-        'length': 20,
-        'uppercase': 20,
-        'lowercase': 20,
-        'digit': 20,
-        'special': 20
+        'length': {'weight': 25, 'func': lambda s: min(len(s)/12, 1)},
+        'uppercase': {'weight': 20, 'func': lambda s: 1 if re.search(r'[A-Z]', s) else 0},
+        'lowercase': {'weight': 20, 'func': lambda s: 1 if re.search(r'[a-z]', s) else 0},
+        'digits': {'weight': 15, 'func': lambda s: 1 if re.search(r'\d', s) else 0},
+        'special': {'weight': 20, 'func': lambda s: 1 if re.search(r'[!@#$%^&*()_+{}\[\]:;<>,.?/~\\-]', s) else 0}
     }
 
-    # Length check
-    if len(password) >= 12:
-        total_score += criteria['length']
-    elif len(password) >= 8:
-        total_score += criteria['length'] * 0.75
-        feedback.append("✅ But consider using more than 12 characters.")
-    else:
-        feedback.append("❌ Too short. Minimum 8 characters recommended.")
+    score = 0
+    breakdown = {}
+    feedback = []
 
-    # Uppercase
-    if re.search(r"[A-Z]", password):
-        total_score += criteria['uppercase']
-    else:
-        feedback.append("❌ Add at least one uppercase letter.")
+    for name, crit in criteria.items():
+        val = crit['func'](password)
+        part = val * crit['weight']
+        breakdown[name] = int(part)
+        score += part
+        if val == 0:
+            if name == 'length':
+                feedback.append("Use at least 12 characters for maximum points.")
+            elif name == 'uppercase':
+                feedback.append("Add uppercase letters.")
+            elif name == 'lowercase':
+                feedback.append("Add lowercase letters.")
+            elif name == 'digits':
+                feedback.append("Include digits.")
+            elif name == 'special':
+                feedback.append("Include special characters like !@#$.")
 
-    # Lowercase
-    if re.search(r"[a-z]", password):
-        total_score += criteria['lowercase']
-    else:
-        feedback.append("❌ Add at least one lowercase letter.")
+    # Check breach via HIBP API
+    sha1pwd = hashlib.sha1(password.encode()).hexdigest().upper()
+    prefix, suffix = sha1pwd[:5], sha1pwd[5:]
+    breached = False
+    count = 0
+    try:
+        res = requests.get(f"https://api.pwnedpasswords.com/range/{prefix}")
+        if res.status_code == 200:
+            for line in res.text.splitlines():
+                hash_suffix, c = line.split(':')
+                if hash_suffix == suffix:
+                    breached = True
+                    count = int(c)
+                    break
+    except:
+        pass
 
-    # Digit
-    if re.search(r"\d", password):
-        total_score += criteria['digit']
-    else:
-        feedback.append("❌ Include at least one digit.")
+    # SHA‑256 hash
+    hashed = hashlib.sha256(password.encode()).hexdigest()
 
-    # Special characters
-    if re.search(r"[!@#$%^&*()_+{}[\]:;<>,.?/~\-]", password):
-        total_score += criteria['special']
-    else:
-        feedback.append("❌ Use at least one special character (!@# etc).")
+    return {
+        "score": int(score),
+        "breakdown": breakdown,
+        "feedback": feedback,
+        "breached": breached,
+        "breach_count": count,
+        "sha256": hashed
+    }
 
-    return int(total_score), feedback
-
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
-
-def print_strength_bar(score):
-    bar_length = 30
-    filled_length = int(round(bar_length * score / 100))
-    bar = '█' * filled_length + '-' * (bar_length - filled_length)
-    print(f"🔒 Strength: [{bar}] {score}%")
-
-if __name__ == "__main__":
-    pwd = input("🔐 Enter your password: ")
-    score, suggestions = check_password_strength(pwd)
-
-    print_strength_bar(score)
-
-    if score < 60:
-        print("⚠️ Your password is weak. Suggestions:")
-        for s in suggestions:
-            print(" -", s)
-    elif score < 85:
-        print("✅ Decent password, but there's room to improve:")
-        for s in suggestions:
-            print(" -", s)
-    else:
-        print("🎉 Strong password!")
-
-    print("\n🔑 SHA-256 Hash:", hash_password(pwd))
+@app.post("/generate")
+def generate_password():
+    """
+    Always generate a secure 12-character password
+    composed of uppercase, lowercase, digits, and specials.
+    """
+    alphabet = string.ascii_letters + string.digits + "!@#_"
+    pw = ''.join(secrets.choice(alphabet) for _ in range(12))
+    return {"password": pw}
