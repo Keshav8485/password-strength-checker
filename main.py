@@ -1,4 +1,4 @@
-# main.py
+# main.py (API Server for Browser Extension)
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +11,7 @@ import string
 
 app = FastAPI()
 
-# CORS middleware for browser-based access (use restrictive origin in production)
+# CORS middleware for browser-based access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,10 +33,12 @@ def root():
         }
     }
 
+# --- This file has the exact same logic as the functions in app.py ---
+# --- but exposed as API endpoints for your extension ---
+
 @app.post("/analyze")
 def analyze_password(data: PasswordInput):
     password = data.password
-
     criteria = {
         'length': {'weight': 25, 'func': lambda s: min(len(s)/12, 1)},
         'uppercase': {'weight': 20, 'func': lambda s: 1 if re.search(r'[A-Z]', s) else 0},
@@ -44,55 +46,30 @@ def analyze_password(data: PasswordInput):
         'digits': {'weight': 15, 'func': lambda s: 1 if re.search(r'\d', s) else 0},
         'special': {'weight': 20, 'func': lambda s: 1 if re.search(r'[!@#$%^&*()_+{}\[\]:;<>,.?/~\\-]', s) else 0}
     }
-
-    score = 0
-    breakdown = {}
-    feedback = []
-
+    score, breakdown, feedback = 0, {}, []
     for name, crit in criteria.items():
-        val = crit['func'](password)
-        part = val * crit['weight']
-        breakdown[name] = int(part)
-        score += part
+        val, part = crit['func'](password), val * crit['weight']
+        breakdown[name], score = int(part), score + part
         if val == 0:
-            if name == 'length':
-                feedback.append("Use at least 12 characters.")
-            elif name == 'uppercase':
-                feedback.append("Add uppercase letters.")
-            elif name == 'lowercase':
-                feedback.append("Add lowercase letters.")
-            elif name == 'digits':
-                feedback.append("Include digits.")
-            elif name == 'special':
-                feedback.append("Include special characters.")
-
-    # Check breach via HIBP API
+            if name == 'length': feedback.append("Use at least 12 characters.")
+            elif name == 'uppercase': feedback.append("Add uppercase letters.")
+            elif name == 'lowercase': feedback.append("Add lowercase letters.")
+            elif name == 'digits': feedback.append("Include digits.")
+            elif name == 'special': feedback.append("Include special characters.")
     sha1pwd = hashlib.sha1(password.encode()).hexdigest().upper()
     prefix, suffix = sha1pwd[:5], sha1pwd[5:]
-    breached = False
-    count = 0
+    breached, count = False, 0
     try:
-        res = requests.get(f"https://api.pwnedpasswords.com/range/{prefix}")
+        res = requests.get(f"https://api.pwnedpasswords.com/range/{prefix}", timeout=5)
         if res.status_code == 200:
             for line in res.text.splitlines():
                 hash_suffix, c = line.split(':')
                 if hash_suffix == suffix:
-                    breached = True
-                    count = int(c)
+                    breached, count = True, int(c)
                     break
-    except:
-        pass
-
+    except requests.RequestException: pass
     hashed = hashlib.sha256(password.encode()).hexdigest()
-
-    return {
-        "score": int(score),
-        "breakdown": breakdown,
-        "feedback": feedback,
-        "breached": breached,
-        "breach_count": count,
-        "sha256": hashed
-    }
+    return {"score": int(score), "breakdown": breakdown, "feedback": feedback, "breached": breached, "breach_count": count, "sha256": hashed}
 
 @app.post("/generate")
 def generate_password():
